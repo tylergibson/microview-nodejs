@@ -15,16 +15,22 @@ oled.begin(function(){
     oled.line(31, 0, 31, 47, 1, 0);*/
     //oled.line(0, 2, 63, 2, 1, 0);
     //oled.rect(5, 5, 30, 30, 1);
-    oled.circleFill(31, 23, 10, 1);
-    oled.display();
+    //oled.circleFill(31, 23, 10, 1);
+    //oled.display();
     
-/*    fs.readFile(path.join(__dirname, '/images/Delta_seatMaintenance_24x24.bmp'), function(err, data){
+    fs.readFile(path.join(__dirname, '/images/sample.bmp'), function(err, data){
         if(err) throw err;
-        console.log(data);
+        //console.log(data);
         //oled.clear(1);
-        oled.drawBitmap(data, 5, 5, 24, 24);
-        oled.display();
-    });*/
+        for(var i=0; i<15; i++) {
+            oled.clear(0);
+            oled.drawBitmap(data, i, i);
+            
+            oled.display();
+        }
+    });
+    
+    
 
 });
 

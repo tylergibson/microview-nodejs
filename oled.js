@@ -405,16 +405,60 @@ EdisonOLED.prototype.circleFill = function (x0, y0, radius, color, mode) {
 EdisonOLED.prototype.drawChar = function (x, y, c, color, mode) {
     // body...
 };
-EdisonOLED.prototype.drawBitmap = function (data, x, y, width, height) {
-    var byteOffset = 14;
-    var pos = 0;
-    var stride = width; // assuming an 8-bit rgb format
+EdisonOLED.prototype.drawBitmap = function (data, x, y) {
+    var pixelArrayByteOffset = data.readUInt32LE(10);
+    var DIBHeader = data.readInt32LE(14);
+    var width = data.readUInt32LE(18);
+    var height = data.readUInt32LE(22);
+    var bitsPerPixel = data.readUInt16LE(28);
+    var pixelArray = data.slice(pixelArrayByteOffset);
+    var currentByte = 0;
+    var paddingCount = 0; //account for 32bit dword padding for rows.
+    var column = 0;
+    var row = 0;
+    
+    var rowLogBuffer1 = "";
+    var rowLogBuffer2 = "";
+    
     //var RowSize = [(1 * 24 + 31) / 32] * 4
     //console.log(RowSize);
-    for(var row=0;row<height;row++){
-        for(var col=0;col<width;col++){
-            pos = (col*stride)+(row*3) + byteOffset;
-            //console.log(pos);
+    //console.log("DIBHeader: "+DIBHeader);
+    //console.log("height: "+height+ ", width: "+width);
+    //console.log("bitsperpixel: "+ bitsPerPixel + ", pixeloffset: "+pixelArrayByteOffset + ", pixelLength: "+pixelArray.length);
+    //Assuming for now that bmp is 1 bit
+    for(var i=0; i<width; i++) {
+        rowLogBuffer1 += " " + i;
+    }
+    //console.log("    " + rowLogBuffer1);
+    for(var pos=0;pos<pixelArray.length;pos++){
+        //console.log(pos);
+        if(bitsPerPixel == 1) {  
+            currentByte = pixelArray[pos];
+            //console.log("Pos: "+pos + "    -   CurrentByte: "+currentByte);
+            for(var i=7; i>=0; i--) {
+                //Need to check for the X bits of padding on the end of each row
+                //Where X is the difference of row size - width?
+                if((currentByte>>i) % 2 != 0 && paddingCount < width) {
+                    rowLogBuffer2 += " * "; 
+                    //console.log("Column: " +column + "  -  Row: " +row);
+                    //console.log("BIT BLIT");
+                    this.pixel(x + column, y + row, 1, 0);
+                } else {
+                    rowLogBuffer2 += "   ";
+                }
+                column++;
+                paddingCount++;
+            }
+            if(paddingCount >= 31) {
+                //bitmaps pad rows in 32bit dwords, so we need to track for padding independent of columns.
+                //console.log(rowLogBuffer2 + " Row: " + row);
+                rowLogBuffer2 = "";
+                row++;
+                paddingCount = 0;
+                column = 0;
+            }
+        }
+        if(bitsPerPixel == 24) {    
             var r = data[pos];
             var g = data[pos + 1];
             var b = data[pos + 2];
@@ -424,9 +468,6 @@ EdisonOLED.prototype.drawBitmap = function (data, x, y, width, height) {
                 //console.log('x: ' + px + ' | y: ' + py);
                 this.pixel(px, py, 1, 0);
             }
-/*            pos = (col*stride)+(row);
-            var bit = data[row*col];
-            console.log(bit);*/
         }
     }
 };
