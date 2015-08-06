@@ -1,6 +1,6 @@
 var mraa = require('mraa');
 var OledFonts = require('./oledfonts');
-var fonts = new OledFonts();
+var FONTS = new OledFonts();
 var BLACK = 0;
 var WHITE = 1;
 var LCDWIDTH = 64;
@@ -34,19 +34,19 @@ var CHARGEPUMP = 0x8D;
 var EXTERNALVCC = 0x01;
 var SWITCHCAPVCC = 0x02;
 
-var CS_PIN = new mraa.Spi(9); //SPI-5-CS1 GPIO 111
-//CS_PIN(mraa.DIR_OUT);
 var RST_PIN = new mraa.Gpio(48); //GPIO 15
 RST_PIN.dir(mraa.DIR_OUT);
 var DC_PIN = new mraa.Gpio(36); // GPIO 14
 DC_PIN.dir(mraa.DIR_OUT);
-var SCLK_PIN = new mraa.Spi(10); //SPI-5-SCK GPIO 109
-var MOSI_PIN = new mraa.Spi(11); //SPI-5-MOSI GPIO 115
+var MOSI_PIN = new mraa.Spi(0); //SPI-5-MOSI GPIO 115
 
 var HIGH = 1;
 var LOW = 0;
 
-var screenmemory = new Uint8Array([
+var FONTTYPES = [FONTS.font5x7, FONTS.font8x16, FONTS.sevensegment, FONTS.fontlargenumber];
+var screenbuffer = new Buffer(1024);
+
+var screenmemory = new Buffer([
     // ROW0, unsigned char0 to unsigned char63
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xE0, 0xF8, 0xFC, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -87,6 +87,15 @@ var EdisonOLED = function(){
     this.drawMode = NORM;
     this.foreColor = WHITE;
     this.fontType = 0;
+    this.font = FONTTYPES[0];
+    this.fontWidth;
+    this.fontHeight;
+    this.fontStartChar;
+    this.fontTotalChar;
+    this.fontMapWidth;
+    this.cursorX;
+	this.cursorY;
+    this.firstClear = true;
 };
 EdisonOLED.prototype.swap = function(pos){
     var t = pos.x; pos.x = pos.y; pos.y = t;
@@ -97,7 +106,7 @@ EdisonOLED.prototype.begin = function(callback){
     this.setDrawMode(NORM);
     this.setCursor(0, 0);
 
-    this.spiSetup();
+    this.spiSetup(25000);
 
     var _this = this;
     RST_PIN.write(HIGH);
@@ -152,11 +161,36 @@ EdisonOLED.prototype.contrast = function(contrast){
   	this.command(SETCONTRAST);			// 0x81
 	this.command(contrast);  
 };
-EdisonOLED.prototype.write = function (char) {
+EdisonOLED.prototype.write = function(c){
+    if (c == '\n')
+	{
+		this.cursorY += this.fontHeight;
+		this.cursorX  = 0;
+	}
+	else if (c == '\r')
+	{
+		// skip
+	}
+	else
+	{
+		this.drawChar(this.cursorX, this.cursorY, c, this.foreColor, this.drawMode);
+		this.cursorX += this.fontWidth+1;
+		if ((this.cursorX > (LCDWIDTH - this.fontWidth)))
+		{
+			this.cursorY += this.fontHeight;
+			this.cursorX = 0;
+		}
+	}
 
+	return 1;
 };
 EdisonOLED.prototype.print = function (c) {
-    // body...
+    var len = c.length;
+
+	for (var i=0; i<len; i++)
+	{
+		this.write(c[i]);
+	}	
 };
 // raw LCD functions
 EdisonOLED.prototype.command = function (c) {
@@ -179,6 +213,11 @@ EdisonOLED.prototype.setPageAddress = function (add) {
 };
 // LCD draw functions
 EdisonOLED.prototype.clear = function (mode, c) {
+/*    if(this.firstClear){
+        this.firstClear = false;
+        this.spiSetup(25000);
+    }*/
+    
     //	unsigned char page=6, col=0x40;
 	if (mode==ALL)
 	{
@@ -186,32 +225,39 @@ EdisonOLED.prototype.clear = function (mode, c) {
 		{
 			this.setPageAddress(i);
 			this.setColumnAddress(0);
-			for (var j=0; j<0x80; j++)
+            var packet = new Buffer(128);
+            for(var b=0;b<packet.length;b++){
+                packet[b] = 0x00;   
+            }
+            this.spiWrite(packet);
+/*			for (var j=0; j<0x80; j++)
 			{
                 if(c){
-                    this.data(c);
+                    this.data(c.charCodeAt(0));
                 }else{
-				    this.data(0);
+				    this.data(0x00);
                 }
-			}
+			}*/
 		}
 	}
 	else
 	{
-		//memset(screenmemory,0,384);			// (64 x 48) / 8 = 384
-        for(var i = 0; i < screenmemory.length; i++){
-            screenmemory[i] = 0;   
+        //the GDDRAM is 128x64 - 
+        for(var i = 0; i < screenbuffer.length; i++){
+            screenbuffer.writeUInt8(0x00, i);   
         }
-        //this.spiWrite(screenmemory);
+//        for(var i = 0; i < screenmemory.length; i++){
+//            screenmemory.writeUInt8(0x00, i);   
+//        }
 	}
 };
 EdisonOLED.prototype.setCursor = function (x, y) {
-    cursorX=x;
-	cursorY=y;
+    this.cursorX=x;
+	this.cursorY=y;
 };
 EdisonOLED.prototype.pixel = function (x, y, color, mode) {
-    color = this.foreColor|color;
-    mode = this.drawMode|mode;
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;
     
     if ((x<0) ||  (x>=LCDWIDTH) || (y<0) || (y>=LCDHEIGHT))
     return;
@@ -219,20 +265,20 @@ EdisonOLED.prototype.pixel = function (x, y, color, mode) {
     if (mode==XOR)
     {
         if (color==WHITE)
-            screenmemory[x+ Math.floor(y/8)*LCDWIDTH] ^= (1<<(y%8));
+            screenbuffer[x+ Math.floor(y/8)*LCDWIDTH] ^= (1<<(y%8));
     }
     else
     {
         
         if (color==WHITE)
-            screenmemory[x+ Math.floor(y/8)*LCDWIDTH] |= (1<<(y%8));
+            screenbuffer[x+ Math.floor(y/8)*LCDWIDTH] |= (1<<(y%8));
         else
-            screenmemory[x+ Math.floor(y/8)*LCDWIDTH] &= ~(1<<(y%8));
+            screenbuffer[x+ Math.floor(y/8)*LCDWIDTH] &= ~(1<<(y%8));
     }
 };
 EdisonOLED.prototype.line = function (x0, y0, x1, y1, color, mode) {
-    color = this.foreColor|color;
-    mode = this.drawMode|mode;
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;
     
     var steep = Math.abs(y1 - y0) > Math.abs(x1 - x0);
     var pos = {x:x0, y:y0};
@@ -300,8 +346,8 @@ EdisonOLED.prototype.lineV = function (x, y, height, color, mode) {
     this.line(x,y,x,y+height,color,mode);
 };
 EdisonOLED.prototype.rect = function (x, y, height, width, color, mode) {
-    color = this.foreColor|color;
-    mode = this.drawMode|mode;
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;
     
     var tempHeight;
 
@@ -319,14 +365,17 @@ EdisonOLED.prototype.rect = function (x, y, height, width, color, mode) {
 	this.lineV(x+width-1, y+1, tempHeight, color, mode);
 };
 EdisonOLED.prototype.rectFill = function (x, y, height, width, color, mode) {
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;    
+    
     for (var i=x; i<x+width;i++)
 	{
 		this.lineV(i,y, height, color, mode);
 	}
 };
 EdisonOLED.prototype.circle = function (x0, y0, radius, color, mode) {
-    color = this.foreColor|color;
-    mode = this.drawMode|mode;
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;  
     
     var f = 1 - radius;
 	var ddF_x = 1;
@@ -364,6 +413,9 @@ EdisonOLED.prototype.circle = function (x0, y0, radius, color, mode) {
 	}
 };
 EdisonOLED.prototype.circleFill = function (x0, y0, radius, color, mode) {
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;
+    
     var f = 1 - radius;
 	var ddF_x = 1;
 	var ddF_y = -2 * radius;
@@ -403,9 +455,101 @@ EdisonOLED.prototype.circleFill = function (x0, y0, radius, color, mode) {
 	}
 };
 EdisonOLED.prototype.drawChar = function (x, y, c, color, mode) {
-    // body...
+    if(typeof color === 'undefined') color = this.foreColor;
+    if(typeof mode === 'undefined') mode = this.drawMode;
+    
+    var rowsToDraw,row, tempC;
+	var i,j,temp;
+	var charPerBitmapRow,charColPositionOnBitmap,charRowPositionOnBitmap,charBitmapStartPosition;
+
+    var charCode = c.charCodeAt(0);
+	if ((charCode<this.fontStartChar) || (charCode>(this.fontStartChar+this.fontTotalChar-1)))		// no bitmap for the required c
+	return;
+    
+    //console.log(charCode);
+	tempC=charCode-this.fontStartChar;
+    //console.log(tempC);
+
+	// each row (in datasheet is call page) is 8 bits high, 16 bit high character will have 2 rows to be drawn
+	rowsToDraw=this.fontHeight/8;	// 8 is LCD's page size, see SSD1306 datasheet
+    //console.log('rowstodraw: ' + rowsToDraw);
+	if (rowsToDraw<=1) rowsToDraw=1;
+
+	// the following draw function can draw anywhere on the screen, but SLOW pixel by pixel draw
+	if (rowsToDraw==1)
+	{
+        //console.log('fontWidth: ' + this.fontWidth);
+		for  (i=0;i<this.fontWidth+1;i++)
+		{
+			if (i==this.fontWidth) // this is done in a weird way because for 5x7 font, there is no margin, this code add a margin after col 5
+				temp=0;
+			else
+                temp=this.font.readUInt8(FONTHEADERSIZE+(tempC*this.fontWidth)+i);
+            
+            //console.log('temp: ' + temp);
+
+			for (j=0;j<8;j++)
+			{			
+                // 8 is the LCD's page height (see datasheet for explanation)
+				if (temp & 0x1)
+				{
+					this.pixel(x+i, y+j, color,mode);
+				}
+				else
+				{
+                    var tempColor = 0;
+                    if(color == 1)
+                        tempColor = 0;
+                    else if(color == 0)
+                        tempColor =1;
+                    
+					this.pixel(x+i, y+j, tempColor,mode);
+				}
+				
+				temp >>=1;
+			}
+		}
+		return;
+	}
+
+	// font height over 8 bit
+	// take character "0" ASCII 48 as example
+	charPerBitmapRow=this.fontMapWidth/this.fontWidth;  // 256/8 =32 char per row
+	charColPositionOnBitmap=tempC % charPerBitmapRow;  // =16
+	charRowPositionOnBitmap=Math.floor(tempC/charPerBitmapRow); // =1
+	charBitmapStartPosition=(charRowPositionOnBitmap * this.fontMapWidth * (this.fontHeight/8)) + (charColPositionOnBitmap * this.fontWidth) ;
+
+	// each row on LCD is 8 bit height (see datasheet for explanation)
+	for(row=0;row<rowsToDraw;row++)
+	{
+		for (i=0; i<this.fontWidth;i++)
+		{
+			//temp=pgm_read_byte(fontsPointer[fontType]+FONTHEADERSIZE+(charBitmapStartPosition+i+(row*this.fontMapWidth)));
+            temp=this.font.readUInt8(FONTHEADERSIZE+(charBitmapStartPosition+i+(row*this.fontMapWidth)));
+
+			for (j=0;j<8;j++)
+			{			
+                // 8 is the LCD's page height (see datasheet for explanation)
+				if (temp & 0x1)
+				{
+					this.pixel(x+i,y+j+(row*8), color, mode);
+				}
+				else
+				{
+                    var tempColor = 0;
+                    if(color == 1)
+                        tempColor = 0;
+                    else if(color == 0)
+                        tempColor =1;
+                    
+					this.pixel(x+i,y+j+(row*8), tempColor, mode);
+				}
+				temp >>=1;
+			}
+		}
+	}
 };
-EdisonOLED.prototype.drawBitmap = function (data, x, y) {
+EdisonOLED.prototype.drawBitmap = function (data, x, y, width, height) {
     var pixelArrayByteOffset = data.readUInt32LE(10);
     var DIBHeader = data.readInt32LE(14);
     var width = data.readUInt32LE(18);
@@ -472,10 +616,10 @@ EdisonOLED.prototype.drawBitmap = function (data, x, y) {
     }
 };
 EdisonOLED.prototype.getLCDWidth = function () {
-    // body...
+    return LCDWIDTH;
 };
 EdisonOLED.prototype.getLCDHeight = function () {
-    // body...
+    return LCDHEIGHT;
 };
 EdisonOLED.prototype.setColor = function (color) {
     this.foreColor = color;
@@ -485,37 +629,43 @@ EdisonOLED.prototype.setDrawMode = function (mode) {
 };
 EdisonOLED.prototype.display = function (mode) {
     var i, j;
-
     for (i=0; i<6; i++)
     {
+        // write the whole page buffer
         this.setPageAddress(i);
         this.setColumnAddress(0);
-        for (j=0;j<0x40;j++)
-        {
-            this.data(screenmemory[i*0x40+j]);
-        }
+        var start = i*64;
+        var end = start + 64;
+        //console.log('start: ' + start + '| end: ' +end);
+        var packet = new Buffer(128);
+        screenbuffer.copy(packet, 0, start, end);
+        this.spiWrite(packet);
     }
 };
 // Font functions
 EdisonOLED.prototype.setFontType = function (type) {
+    if(type >= FONTTYPES.length || type < 0) throw new Error("invalid font type");
+    
     this.fontType = type;
+    this.font = FONTTYPES[type];
+    this.fontWidth = this.font.readUInt8(0);
+    this.fontHeight = this.font.readUInt8(1);
+    this.fontStartChar = this.font.readUInt8(2);
+    this.fontTotalChar = this.font.readUInt8(3);
+    this.fontMapWidth = (this.font.readUInt8(4) * 100) + this.font.readUInt8(5);
 };
-EdisonOLED.prototype.spiSetup = function () {
-    CS_PIN.mode(0);
-    CS_PIN.frequency(10000000);
-    CS_PIN.writeByte(HIGH);
-    SCLK_PIN.mode(0);
-    SCLK_PIN.frequency(10000000);
+EdisonOLED.prototype.spiSetup = function (freq) {
     MOSI_PIN.mode(0);
-    MOSI_PIN.frequency(10000000);
+    //MOSI_PIN.frequency(10000000);
+    MOSI_PIN.frequency(freq); // reduce the clock speed work around an Intel kernel issue
 };
 EdisonOLED.prototype.spiTransfer = function (data) {
-    CS_PIN.writeByte(data);
+    MOSI_PIN.writeByte(data);
 };
 EdisonOLED.prototype.spiWrite = function (data) {
-    console.log('spiWrite - length: ' + data.length);
-    //DC_PIN.write(HIGH);
-    CS_PIN.write(new Buffer(data));
+    //console.log('spiWrite - length: ' + data.length);
+    DC_PIN.write(HIGH);
+    MOSI_PIN.write(new Buffer(data));
 };
 var CMD;
 (function (CMD) {
